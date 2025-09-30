@@ -31,4 +31,12 @@ class HomeController extends Controller
             dd("❌ Not a valid URL");
         }
     }
+    public function isValidUrl_bk(){
+        $url = "https://cotysh.com";
+        if (Str::isUrl($url)) {
+            dd("✅ Valid URL");
+        } else {
+            dd("❌ Not a valid URL");
+        }
+    }
 }

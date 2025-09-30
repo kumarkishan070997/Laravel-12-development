@@ -1,0 +1,45 @@
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  ai-review:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1) Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2) Set up PHP (matches your local version)
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'  # Match your local PHP version
+          coverage: none
+
+      # 3) Install AI reviewer dependencies
+      - name: Install AI reviewer deps
+        run: |
+          cd tools/ai-review
+          composer install --no-interaction --prefer-dist
+
+      # 4) Run AI reviewer script
+      - name: Run AI reviewer
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd tools
+          php ai_review.php \
+            --pr=${{ github.event.pull_request.number }} \
+            --sha=${{ github.event.pull_request.head.sha }} \
+            --repo=${{ github.repository }}
