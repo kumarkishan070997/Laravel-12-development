@@ -4,120 +4,128 @@ require __DIR__ . '/ai-review/vendor/autoload.php';
 use GuzzleHttp\Client;
 use Symfony\Component\Yaml\Yaml;
 
-$opts = getopt('', ['pr:', 'sha:', 'repo:']);
-$pr   = $opts['pr'] ?? null;
-$sha  = $opts['sha'] ?? null;
-$repo = $opts['repo'] ?? null;
-
-if (!$pr || !$sha || !$repo) {
-    echo "Missing required arguments: --pr, --sha, --repo\n";
+// -------------------------
+// Parse CLI arguments
+// -------------------------
+$opts = getopt("", ["pr:", "repo:", "token:", "hf_token:"]);
+if (!isset($opts['pr'], $opts['repo'], $opts['token'], $opts['hf_token'])) {
+    echo "Missing required arguments. Usage: php ai_review.php --pr=NUMBER --repo=owner/repo --token=GITHUB_TOKEN --hf_token=HF_TOKEN\n";
     exit(1);
 }
 
-$hfToken = getenv('HF_TOKEN');       // Hugging Face token
-$ghToken = getenv('GITHUB_TOKEN');   // GitHub token
+$pr = $opts['pr'];
+$repo = $opts['repo'];
+$githubToken = $opts['token'];
+$hfToken = $opts['hf_token'];
 
-$client = new Client();
-
-// 1) Get changed files from PR
-$resp = $client->get("https://api.github.com/repos/{$repo}/pulls/{$pr}/files", [
-    'headers' => [
-        'Authorization' => "Bearer {$ghToken}",
-        'Accept'        => 'application/vnd.github+json',
-    ]
-]);
-$files = json_decode($resp->getBody(), true);
-
-// 2) Load review rules if config exists
-$rules = [];
-if (file_exists('.ai-review.yml')) {
-    $rules = Yaml::parseFile('.ai-review.yml');
-}
-
-// 3) Build diffs string
-$diffs = "";
-foreach ($files as $f) {
-    if (!isset($f['patch'])) continue;
-    $diffs .= "File: {$f['filename']}\nPatch:\n{$f['patch']}\n\n";
-}
-if (empty($diffs)) {
-    echo "No diffs found. Exiting.\n";
-    exit(0);
-}
-
-// 4) Build concise prompt
-$rulesText = $rules ? json_encode($rules, JSON_PRETTY_PRINT) : "No custom rules";
-
-$prompt = <<<PROMPT
-You are a professional code reviewer.
-
-Rules:
-- Follow these repo-specific rules:
-$rulesText
-
-Task:
-- Review the following code changes.
-- Be concise and actionable, like a human reviewer.
-- Focus on security, bugs, style, missing tests.
-- Output JSON array: [{"file":"<file_path>","line":<line_number>,"comment":"<text>"}]
-- Each comment should be 1-2 sentences max, clean and professional.
-
-Code diffs:
-$diffs
-PROMPT;
-
-// 5) Call Hugging Face Inference API
-$hfResp = $client->post("https://router.huggingface.co/nebius/v1/completions", [
-    'headers' => [
-        'Authorization' => "Bearer {$hfToken}",
-        'Accept'        => 'application/json',
-        'Content-Type'  => 'application/json',
-    ],
-    'json' => [
-        'inputs' => $prompt,
-        'model' => 'openai/gpt-oss-20b',
-        'prompt' => $prompt,
-        'parameters' => [
-            'max_new_tokens' => 500
-        ],
-        'options' => [
-            'use_cache' => false
-        ]
-    ]
-]);
-
-$out = json_decode($hfResp->getBody(), true);
-
-// 6) Extract review JSON from Hugging Face response
-$reviewJson = "";
-if (isset($out['choices'][0]['text'])) {
-    $reviewJson = trim($out['choices'][0]['text']);
-} else {
-    $reviewJson = json_encode($out, JSON_PRETTY_PRINT);
-}
-
-// 7) Post each comment to GitHub PR
-$comments = json_decode($reviewJson, true);
-if (!is_array($comments)) {
-    echo "Failed to decode AI review JSON:\n$reviewJson\n";
+if (empty($hfToken)) {
+    echo "HF_TOKEN is empty. Set the Hugging Face token.\n";
     exit(1);
 }
 
-foreach ($comments as $c) {
-    if (!isset($c['file'], $c['line'], $c['comment'])) continue;
-    $client->post("https://api.github.com/repos/{$repo}/pulls/{$pr}/comments", [
+$client = new Client([
+    'headers' => [
+        'Authorization' => "token {$githubToken}",
+        'Accept'        => 'application/vnd.github+json'
+    ]
+]);
+
+// -------------------------
+// Get PR files
+// -------------------------
+try {
+    $response = $client->get("https://api.github.com/repos/{$repo}/pulls/{$pr}/files");
+    $files = json_decode($response->getBody()->getContents(), true);
+} catch (\Exception $e) {
+    echo "Failed to fetch PR files: {$e->getMessage()}\n";
+    exit(1);
+}
+
+// -------------------------
+// Collect diffs for AI
+// -------------------------
+$diffs = [];
+foreach ($files as $file) {
+    $diffs[] = [
+        'filename' => $file['filename'],
+        'patch' => $file['patch'] ?? ''
+    ];
+}
+
+// -------------------------
+// Prepare prompt for AI
+// -------------------------
+$prompt = "You are a code reviewer. Review the following diffs and provide concise, clear comments for each code change. Do not write long paragraphs. Output must be a JSON array. Each object must have exactly 'file', 'line', and 'comment'. Each comment should be short and relevant.\n\n";
+$prompt .= json_encode($diffs, JSON_PRETTY_PRINT);
+
+// -------------------------
+// Call Hugging Face API
+// -------------------------
+$hfClient = new Client(['base_uri' => 'https://api-inference.huggingface.co/']);
+try {
+    $hfResponse = $hfClient->post("nebius/v1/completions", [
         'headers' => [
-            'Authorization' => "Bearer {$ghToken}",
-            'Accept'        => 'application/vnd.github+json',
+            'Authorization' => "Bearer {$hfToken}",
+            'Content-Type'  => 'application/json'
         ],
         'json' => [
-            'body' => $c['comment'],
-            'commit_id' => $sha,
-            'path' => $c['file'],
-            'line' => $c['line'],
-            'side' => 'RIGHT'
+            'inputs' => $prompt,
+            'model' => 'openai/gpt-oss-20b',
+            'parameters' => [
+                'max_new_tokens' => 500
+            ],
+            'options' => [
+                'use_cache' => false
+            ],
+            'prompt' => $prompt
         ]
     ]);
+} catch (\Exception $e) {
+    echo "Hugging Face request failed: {$e->getMessage()}\n";
+    exit(1);
 }
 
-echo "AI review comments posted to PR #{$pr}\n";
+$hfBody = json_decode($hfResponse->getBody()->getContents(), true);
+if (!isset($hfBody['choices'][0]['text'])) {
+    echo "Invalid Hugging Face response.\n";
+    var_dump($hfBody);
+    exit(1);
+}
+
+$aiText = trim($hfBody['choices'][0]['text'] ?? '');
+$aiText = preg_replace('/[\x00-\x1F\x7F]/u', '', $aiText); // remove control chars
+
+$comments = json_decode($aiText, true);
+if (json_last_error() !== JSON_ERROR_NONE) {
+    echo "Failed to decode AI review JSON: " . json_last_error_msg() . "\n";
+    var_dump($aiText);
+    exit(1);
+}
+
+if (!is_array($comments)) {
+    echo "AI response is not a JSON array.\n";
+    var_dump($aiText);
+    exit(1);
+}
+
+// -------------------------
+// Post comments to GitHub PR
+// -------------------------
+foreach ($comments as $comment) {
+    if (!isset($comment['file'], $comment['line'], $comment['comment'])) continue;
+
+    $payload = [
+        'body' => $comment['comment'],
+        'path' => $comment['file'],
+        'line' => $comment['line'],
+        'side' => 'RIGHT'
+    ];
+
+    try {
+        $client->post("https://api.github.com/repos/{$repo}/pulls/{$pr}/comments", ['json' => $payload]);
+    } catch (\Exception $e) {
+        echo "Failed to post comment on {$comment['file']} line {$comment['line']}: {$e->getMessage()}\n";
+    }
+}
+
+echo "AI review completed successfully.\n";
