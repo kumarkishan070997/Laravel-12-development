@@ -1,5 +1,5 @@
 <?php
-require __DIR__ . '/../vendor/autoload.php';
+require __DIR__ . '/ai-review/vendor/autoload.php';
 
 use GuzzleHttp\Client;
 use Symfony\Component\Yaml\Yaml;
