@@ -1,20 +1,22 @@
 <?php
-require __DIR__ . '/ai-review/vendor/autoload.php';
+require __DIR__ . '/ai-review/vendor/autoload.php'; // path to your AI review composer autoload
 
 use GuzzleHttp\Client;
 use Symfony\Component\Yaml\Yaml;
 
+// --- Get CLI args ---
 $opts = getopt('', ['pr:', 'sha:', 'repo:']);
 $pr   = $opts['pr'];
 $sha  = $opts['sha'];
 $repo = $opts['repo'];
 
-$hfToken = getenv('HF_TOKEN');       // Hugging Face token (from secrets)
-$ghToken = getenv('GITHUB_TOKEN');   // GitHub token (auto from Actions)
+// --- Tokens ---
+$hfToken = getenv('HF_TOKEN');       // Hugging Face token
+$ghToken = getenv('GITHUB_TOKEN');   // GitHub token
 
 $client = new Client();
 
-// 1) Get changed files from PR
+// --- 1) Get changed files from PR ---
 $resp = $client->get("https://api.github.com/repos/{$repo}/pulls/{$pr}/files", [
     'headers' => [
         'Authorization' => "Bearer {$ghToken}",
@@ -23,31 +25,26 @@ $resp = $client->get("https://api.github.com/repos/{$repo}/pulls/{$pr}/files", [
 ]);
 $files = json_decode($resp->getBody(), true);
 
-// 2) Load review rules if config exists
+// --- 2) Load review rules ---
 $rules = [];
 if (file_exists('.ai-review.yml')) {
     $rules = Yaml::parseFile('.ai-review.yml');
 }
-
-// Convert rules to string outside heredoc
 $rulesText = $rules ? json_encode($rules, JSON_PRETTY_PRINT) : "No custom rules";
 
-// 3) Build a prompt with rules + diffs
+// --- 3) Build diffs string ---
 $diffs = "";
 foreach ($files as $f) {
-    if (!isset($f['patch'])) {
-        continue;
-    }
+    if (!isset($f['patch'])) continue;
     $diffs .= "File: {$f['filename']}\nPatch:\n{$f['patch']}\n\n";
 }
 
-// If no diffs, skip
 if (empty($diffs)) {
     echo "No diffs found. Exiting.\n";
     exit(0);
 }
 
-// Heredoc with variables only, no expressions
+// --- 4) Build prompt ---
 $prompt = <<<PROMPT
 You are an AI code reviewer.
 
@@ -66,15 +63,16 @@ Here are the code changes:
 $diffs
 PROMPT;
 
-// 4) Call Hugging Face Inference API with SmolLM3-3B
-$hfResp = $client->post("https://api-inference.huggingface.co/models/HuggingFaceTB/SmolLM3-3B", [
+// --- 5) Call Hugging Face router API with openai/gpt-oss-20b ---
+$hfResp = $client->post("https://router.huggingface.co/nebius/v1/completions", [
     'headers' => [
         'Authorization' => "Bearer {$hfToken}",
-        'Accept'        => 'application/json',
         'Content-Type'  => 'application/json',
     ],
     'json' => [
-        'inputs' => $prompt,
+        'inputs'     => $prompt,
+        'prompt'     => $prompt,
+        'model'      => 'openai/gpt-oss-20b',
         'parameters' => [
             'max_new_tokens' => 500,
         ],
@@ -86,24 +84,22 @@ $hfResp = $client->post("https://api-inference.huggingface.co/models/HuggingFace
 
 $out = json_decode($hfResp->getBody(), true);
 
-// Hugging Face response could be array or object
+// --- 6) Extract AI review text ---
 $reviewText = "";
-if (isset($out[0]['generated_text'])) {
-    $reviewText = $out[0]['generated_text'];
-} elseif (isset($out['generated_text'])) {
-    $reviewText = $out['generated_text'];
+if (isset($out['choices'][0]['text'])) {
+    $reviewText = $out['choices'][0]['text'];
 } else {
     $reviewText = json_encode($out, JSON_PRETTY_PRINT);
 }
 
-// 5) Post the review as a single PR comment
+// --- 7) Post the review as a single PR comment ---
 $client->post("https://api.github.com/repos/{$repo}/issues/{$pr}/comments", [
     'headers' => [
         'Authorization' => "Bearer {$ghToken}",
         'Accept'        => 'application/vnd.github+json',
     ],
     'json' => [
-        'body' => "🤖 **AI Reviewer (SmolLM3-3B)** says:\n\n" . $reviewText,
+        'body' => "🤖 **AI Reviewer (GPT-OSS-20B)** says:\n\n" . $reviewText,
     ],
 ]);
 
