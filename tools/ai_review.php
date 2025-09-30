@@ -29,6 +29,9 @@ if (file_exists('.ai-review.yml')) {
     $rules = Yaml::parseFile('.ai-review.yml');
 }
 
+// Convert rules to string outside heredoc
+$rulesText = $rules ? json_encode($rules, JSON_PRETTY_PRINT) : "No custom rules";
+
 // 3) Build a prompt with rules + diffs
 $diffs = "";
 foreach ($files as $f) {
@@ -44,12 +47,13 @@ if (empty($diffs)) {
     exit(0);
 }
 
+// Heredoc with variables only, no expressions
 $prompt = <<<PROMPT
 You are an AI code reviewer.
 
 Rules:
-- Follow these repo-specific rules: 
-{$rules ? json_encode($rules, JSON_PRETTY_PRINT) : "No custom rules"}
+- Follow these repo-specific rules:
+$rulesText
 
 Task:
 - Review the following code changes.
@@ -59,7 +63,7 @@ Task:
 
 Here are the code changes:
 
-{$diffs}
+$diffs
 PROMPT;
 
 // 4) Call Hugging Face Inference API with SmolLM3-3B
