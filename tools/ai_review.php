@@ -11,7 +11,11 @@ $sha  = $opts['sha'];
 $repo = $opts['repo'];
 
 // --- Tokens ---
-$hfToken = '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';      // Hugging Face token
+$hfToken = getenv('HF_TOKEN');       // Hugging Face token
+if (!$hfToken) {
+    echo "HF_TOKEN is missing!\n";
+    exit(1);
+}
 $ghToken = getenv('GITHUB_TOKEN');   // GitHub token
 
 $client = new Client();
