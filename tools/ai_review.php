@@ -61,7 +61,7 @@ $prompt .= json_encode($diffs, JSON_PRETTY_PRINT);
 // -------------------------
 // Call Hugging Face API
 // -------------------------
-$hfClient = new Client(['base_uri' => 'https://api-inference.huggingface.co/']);
+$hfClient = new Client(['base_uri' => 'https://router.huggingface.co/']);
 try {
     $hfResponse = $hfClient->post("nebius/v1/completions", [
         'headers' => [
