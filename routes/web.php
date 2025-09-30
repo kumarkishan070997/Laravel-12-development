@@ -28,3 +28,4 @@ Route::post('/register/store', [UserRegistrationController::class, 'register'])-
 
 Route::get('/retry', [HomeController::class, 'index']);
 Route::get('/stris', [HomeController::class, 'strIs']);
+Route::get('/isvalidurl', [HomeController::class, 'isValidUrl']);

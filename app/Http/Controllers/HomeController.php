@@ -22,6 +22,13 @@ class HomeController extends Controller
     public function strIs(){
         $one = Str::is('hello', 'hello'); // true
         $two = Str::is('hello', 'world'); // false
-        dd($one,$two);
+    }
+    public function isValidUrl(){
+        $url = "https://cotysh.com";
+        if (Str::isUrl($url)) {
+            dd("✅ Valid URL");
+        } else {
+            dd("❌ Not a valid URL");
+        }
     }
 }
