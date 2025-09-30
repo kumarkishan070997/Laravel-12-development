@@ -1,0 +1,32 @@
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  ai-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+
+      - name: Install composer deps
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Run AI reviewer (PHP)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          php tools/ai_review.php \
+            --pr=${{ github.event.pull_request.number }} \
+            --sha=${{ github.event.pull_request.head.sha }} \
+            --repo=${{ github.repository }}
